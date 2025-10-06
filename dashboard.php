@@ -1,4 +1,5 @@
 <?php
+// dashboard.php - Complete Working Dashboard with All Features
 $pageTitle = 'Dashboard';
 require_once 'config.php';
 requireLogin();
@@ -6,328 +7,467 @@ requireLogin();
 $settings = getSettings();
 $userId = getUserId();
 $userRole = getUserRole();
+$userName = getUserName();
 
-// Initialize services if they exist
+// Initialize AI services safely
 $aiService = null;
-$workflowEngine = null;
+$aiInsights = [];
 $revenuePredictions = [];
 $leadPredictions = [];
 
-// Check if AI services exist before loading
 if (file_exists('app/services/AIPredictionService.php')) {
     require_once 'app/services/AIPredictionService.php';
-    $aiService = new AIPredictionService($pdo);
-    
     try {
+        $aiService = new AIPredictionService($pdo);
+        $aiInsights = $aiService->getInsightsSummary();
         $revenuePredictions = $aiService->predictRevenue(3);
-        
-        // Get lead predictions for top leads
-        $stmt = $pdo->query("SELECT id FROM leads WHERE status IN ('qualified', 'negotiation') LIMIT 5");
-        $topLeadIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($topLeadIds as $leadId) {
-            $leadPredictions[$leadId] = $aiService->predictLeadConversion($leadId);
+        if (is_array($revenuePredictions) && !isset($revenuePredictions['error'])) {
+            // Revenue predictions are valid
+        } else {
+            $revenuePredictions = [];
         }
     } catch (Exception $e) {
         error_log("AI Service Error: " . $e->getMessage());
+        $aiInsights = [];
+        $revenuePredictions = [];
     }
 }
 
-// Get dashboard statistics
-$stats = [];
+// Get current period dates
+$currentMonth = date('Y-m');
+$currentYear = date('Y');
+$today = date('Y-m-d');
+$firstDayOfMonth = date('Y-m-01');
+$lastDayOfMonth = date('Y-m-t');
 
-// Total projects
+// Initialize all statistics
+$stats = [
+    // Projects
+    'total_projects' => 0,
+    'active_projects' => 0,
+    
+    // Plots
+    'total_plots' => 0,
+    'available_plots' => 0,
+    'booked_plots' => 0,
+    'sold_plots' => 0,
+    'plots_value' => 0,
+    
+    // Sales
+    'total_sales' => 0,
+    'monthly_sales' => 0,
+    'today_sales' => 0,
+    'total_revenue' => 0,
+    'monthly_revenue' => 0,
+    'outstanding_balance' => 0,
+    
+    // Payments
+    'total_payments' => 0,
+    'monthly_payments' => 0,
+    'today_payments' => 0,
+    
+    // Leads
+    'total_leads' => 0,
+    'new_leads' => 0,
+    'qualified_leads' => 0,
+    'converted_leads' => 0,
+    'conversion_rate' => 0,
+    
+    // Clients
+    'total_clients' => 0,
+    'new_clients_month' => 0,
+    
+    // Staff
+    'total_staff' => 0,
+    'active_staff' => 0,
+    'clocked_in_today' => 0
+];
+
+// Fetch Projects Statistics
 if (hasPermission('projects', 'view')) {
-    $stmt = $pdo->query("SELECT COUNT(*) as count FROM projects WHERE status = 'active'");
-    $stats['active_projects'] = $stmt->fetch()['count'];
-    
-    $stmt = $pdo->query("SELECT COUNT(*) as count FROM projects");
-    $stats['total_projects'] = $stmt->fetch()['count'];
-}
-
-// Plot statistics
-if (hasPermission('plots', 'view')) {
-    $stmt = $pdo->query("SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) as available,
-        SUM(CASE WHEN status = 'booked' THEN 1 ELSE 0 END) as booked,
-        SUM(CASE WHEN status = 'sold' THEN 1 ELSE 0 END) as sold,
-        COALESCE(SUM(CASE WHEN status = 'available' THEN price ELSE 0 END), 0) as available_value
-        FROM plots");
-    $plotStats = $stmt->fetch();
-    $stats = array_merge($stats, $plotStats);
-}
-
-// Sales statistics
-if (hasPermission('sales', 'view')) {
-    // This month sales
-    $stmt = $pdo->query("SELECT 
-        COUNT(*) as count, 
-        COALESCE(SUM(sale_price), 0) as total,
-        COALESCE(SUM(deposit_amount), 0) as deposits
-        FROM sales 
-        WHERE MONTH(sale_date) = MONTH(CURRENT_DATE()) 
-        AND YEAR(sale_date) = YEAR(CURRENT_DATE())
-        AND status != 'cancelled'");
-    $monthlySales = $stmt->fetch();
-    $stats['monthly_sales'] = $monthlySales['count'];
-    $stats['monthly_revenue'] = $monthlySales['total'];
-    $stats['monthly_deposits'] = $monthlySales['deposits'];
-    
-    // Total sales
-    $stmt = $pdo->query("SELECT 
-        COUNT(*) as count, 
-        COALESCE(SUM(sale_price), 0) as total,
-        COALESCE(SUM(balance), 0) as balance
-        FROM sales WHERE status != 'cancelled'");
-    $totalSales = $stmt->fetch();
-    $stats['total_sales'] = $totalSales['count'];
-    $stats['total_revenue'] = $totalSales['total'];
-    $stats['outstanding_balance'] = $totalSales['balance'];
-    
-    // Today's sales
-    $stmt = $pdo->query("SELECT COUNT(*) as count FROM sales WHERE DATE(sale_date) = CURDATE()");
-    $stats['today_sales'] = $stmt->fetch()['count'];
-}
-
-// Lead statistics
-if (hasPermission('leads', 'view')) {
-    $query = "SELECT 
-        COUNT(*) as total,
-        SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) as new_leads,
-        SUM(CASE WHEN status = 'converted' THEN 1 ELSE 0 END) as converted
-        FROM leads";
-    
-    if ($userRole === 'sales_agent') {
-        $query .= " WHERE assigned_to = ?";
-        $stmt = $pdo->prepare($query);
-        $stmt->execute([$userId]);
-    } else {
-        $stmt = $pdo->query($query);
+    try {
+        $stmt = $pdo->query("SELECT COUNT(*) as count FROM projects");
+        $stats['total_projects'] = $stmt->fetch()['count'];
+        
+        $stmt = $pdo->query("SELECT COUNT(*) as count FROM projects WHERE status = 'active'");
+        $stats['active_projects'] = $stmt->fetch()['count'];
+    } catch (Exception $e) {
+        error_log("Projects stats error: " . $e->getMessage());
     }
-    
-    $leadStats = $stmt->fetch();
-    $stats['total_leads'] = $leadStats['total'];
-    $stats['new_leads'] = $leadStats['new_leads'];
-    $stats['converted_leads'] = $leadStats['converted'];
-    $stats['conversion_rate'] = $leadStats['total'] > 0 ? ($leadStats['converted'] / $leadStats['total']) * 100 : 0;
 }
 
-// Client count
-if (hasPermission('clients', 'view')) {
-    $stmt = $pdo->query("SELECT COUNT(*) as count FROM clients");
-    $stats['total_clients'] = $stmt->fetch()['count'];
+// Fetch Plots Statistics
+if (hasPermission('plots', 'view')) {
+    try {
+        $stmt = $pdo->query("
+            SELECT 
+                COUNT(*) as total_plots,
+                SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) as available_plots,
+                SUM(CASE WHEN status = 'booked' THEN 1 ELSE 0 END) as booked_plots,
+                SUM(CASE WHEN status = 'sold' THEN 1 ELSE 0 END) as sold_plots,
+                COALESCE(SUM(CASE WHEN status = 'available' THEN price ELSE 0 END), 0) as plots_value
+            FROM plots
+        ");
+        $plotStats = $stmt->fetch();
+        $stats = array_merge($stats, $plotStats);
+    } catch (Exception $e) {
+        error_log("Plots stats error: " . $e->getMessage());
+    }
 }
 
-// Payments this month
+// Fetch Sales Statistics
+if (hasPermission('sales', 'view')) {
+    try {
+        // Total sales
+        $query = "SELECT 
+            COUNT(*) as total_sales,
+            COALESCE(SUM(sale_price), 0) as total_revenue,
+            COALESCE(SUM(balance), 0) as outstanding_balance
+            FROM sales WHERE status != 'cancelled'";
+        
+        if ($userRole === 'sales_agent') {
+            $query .= " AND agent_id = ?";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$userId]);
+        } else {
+            $stmt = $pdo->query($query);
+        }
+        $salesStats = $stmt->fetch();
+        $stats = array_merge($stats, $salesStats);
+        
+        // Monthly sales
+        $query = "SELECT 
+            COUNT(*) as monthly_sales,
+            COALESCE(SUM(sale_price), 0) as monthly_revenue
+            FROM sales 
+            WHERE MONTH(sale_date) = MONTH(CURRENT_DATE()) 
+            AND YEAR(sale_date) = YEAR(CURRENT_DATE())
+            AND status != 'cancelled'";
+        
+        if ($userRole === 'sales_agent') {
+            $query .= " AND agent_id = ?";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$userId]);
+        } else {
+            $stmt = $pdo->query($query);
+        }
+        $monthlySales = $stmt->fetch();
+        $stats['monthly_sales'] = $monthlySales['monthly_sales'];
+        $stats['monthly_revenue'] = $monthlySales['monthly_revenue'];
+        
+        // Today's sales
+        $query = "SELECT COUNT(*) as today_sales FROM sales WHERE DATE(sale_date) = CURDATE() AND status != 'cancelled'";
+        if ($userRole === 'sales_agent') {
+            $query .= " AND agent_id = ?";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$userId]);
+        } else {
+            $stmt = $pdo->query($query);
+        }
+        $stats['today_sales'] = $stmt->fetch()['today_sales'];
+        
+    } catch (Exception $e) {
+        error_log("Sales stats error: " . $e->getMessage());
+    }
+}
+
+// Fetch Payment Statistics
 if (hasPermission('payments', 'view')) {
-    $stmt = $pdo->query("SELECT 
-        COALESCE(SUM(amount), 0) as total,
-        COUNT(*) as count
-        FROM payments 
-        WHERE MONTH(payment_date) = MONTH(CURRENT_DATE()) 
-        AND YEAR(payment_date) = YEAR(CURRENT_DATE())");
-    $payments = $stmt->fetch();
-    $stats['monthly_payments'] = $payments['total'];
-    $stats['monthly_payment_count'] = $payments['count'];
+    try {
+        // Total payments
+        $stmt = $pdo->query("SELECT COALESCE(SUM(amount), 0) as total_payments FROM payments");
+        $stats['total_payments'] = $stmt->fetch()['total_payments'];
+        
+        // Monthly payments
+        $stmt = $pdo->query("
+            SELECT COALESCE(SUM(amount), 0) as monthly_payments 
+            FROM payments 
+            WHERE MONTH(payment_date) = MONTH(CURRENT_DATE()) 
+            AND YEAR(payment_date) = YEAR(CURRENT_DATE())
+        ");
+        $stats['monthly_payments'] = $stmt->fetch()['monthly_payments'];
+        
+        // Today's payments
+        $stmt = $pdo->query("SELECT COALESCE(SUM(amount), 0) as today_payments FROM payments WHERE DATE(payment_date) = CURDATE()");
+        $stats['today_payments'] = $stmt->fetch()['today_payments'];
+        
+    } catch (Exception $e) {
+        error_log("Payments stats error: " . $e->getMessage());
+    }
 }
 
-// Recent activities
+// Fetch Lead Statistics
+if (hasPermission('leads', 'view')) {
+    try {
+        $query = "SELECT 
+            COUNT(*) as total_leads,
+            SUM(CASE WHEN status = 'new' THEN 1 ELSE 0 END) as new_leads,
+            SUM(CASE WHEN status = 'qualified' THEN 1 ELSE 0 END) as qualified_leads,
+            SUM(CASE WHEN status = 'converted' THEN 1 ELSE 0 END) as converted_leads
+            FROM leads";
+        
+        if ($userRole === 'sales_agent') {
+            $query .= " WHERE assigned_to = ?";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$userId]);
+        } else {
+            $stmt = $pdo->query($query);
+        }
+        
+        $leadStats = $stmt->fetch();
+        $stats['total_leads'] = $leadStats['total_leads'];
+        $stats['new_leads'] = $leadStats['new_leads'];
+        $stats['qualified_leads'] = $leadStats['qualified_leads'];
+        $stats['converted_leads'] = $leadStats['converted_leads'];
+        $stats['conversion_rate'] = $stats['total_leads'] > 0 ? 
+            round(($stats['converted_leads'] / $stats['total_leads']) * 100, 1) : 0;
+            
+    } catch (Exception $e) {
+        error_log("Leads stats error: " . $e->getMessage());
+    }
+}
+
+// Fetch Client Statistics
+if (hasPermission('clients', 'view')) {
+    try {
+        $stmt = $pdo->query("SELECT COUNT(*) as total_clients FROM clients");
+        $stats['total_clients'] = $stmt->fetch()['total_clients'];
+        
+        $stmt = $pdo->query("
+            SELECT COUNT(*) as new_clients_month 
+            FROM clients 
+            WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) 
+            AND YEAR(created_at) = YEAR(CURRENT_DATE())
+        ");
+        $stats['new_clients_month'] = $stmt->fetch()['new_clients_month'];
+        
+    } catch (Exception $e) {
+        error_log("Clients stats error: " . $e->getMessage());
+    }
+}
+
+// Fetch Staff Statistics
+if (hasPermission('users', 'view')) {
+    try {
+        $stmt = $pdo->query("SELECT COUNT(*) as total_staff FROM users");
+        $stats['total_staff'] = $stmt->fetch()['total_staff'];
+        
+        $stmt = $pdo->query("SELECT COUNT(*) as active_staff FROM users WHERE status = 'active'");
+        $stats['active_staff'] = $stmt->fetch()['active_staff'];
+        
+        $stmt = $pdo->query("
+            SELECT COUNT(DISTINCT user_id) as clocked_in_today 
+            FROM attendance 
+            WHERE DATE(clock_in) = CURDATE() 
+            AND clock_out IS NULL
+        ");
+        $stats['clocked_in_today'] = $stmt->fetch()['clocked_in_today'];
+        
+    } catch (Exception $e) {
+        error_log("Staff stats error: " . $e->getMessage());
+    }
+}
+
+// Get Recent Sales
 $recentSales = [];
 if (hasPermission('sales', 'view')) {
-    $stmt = $pdo->query("SELECT s.*, c.full_name as client_name, p.plot_number, pr.project_name, u.full_name as agent_name
-                         FROM sales s
-                         JOIN clients c ON s.client_id = c.id
-                         JOIN plots p ON s.plot_id = p.id
-                         JOIN projects pr ON p.project_id = pr.id
-                         JOIN users u ON s.agent_id = u.id
-                         WHERE s.status != 'cancelled'
-                         ORDER BY s.created_at DESC LIMIT 5");
-    $recentSales = $stmt->fetchAll();
+    try {
+        $query = "SELECT s.*, c.full_name as client_name, p.plot_number, pr.project_name, u.full_name as agent_name
+                  FROM sales s
+                  JOIN clients c ON s.client_id = c.id
+                  JOIN plots p ON s.plot_id = p.id
+                  JOIN projects pr ON p.project_id = pr.id
+                  JOIN users u ON s.agent_id = u.id
+                  WHERE s.status != 'cancelled'";
+        
+        if ($userRole === 'sales_agent') {
+            $query .= " AND s.agent_id = ?";
+            $query .= " ORDER BY s.created_at DESC LIMIT 5";
+            $stmt = $pdo->prepare($query);
+            $stmt->execute([$userId]);
+        } else {
+            $query .= " ORDER BY s.created_at DESC LIMIT 5";
+            $stmt = $pdo->query($query);
+        }
+        $recentSales = $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Recent sales error: " . $e->getMessage());
+    }
 }
 
-// Top performing agents (if admin/manager)
+// Get Top Agents (Admin/Manager only)
 $topAgents = [];
 if (in_array($userRole, ['admin', 'manager']) && hasPermission('sales', 'view')) {
-    $stmt = $pdo->query("SELECT 
-        u.full_name,
-        COUNT(s.id) as sales_count,
-        COALESCE(SUM(s.sale_price), 0) as total_revenue
-        FROM users u
-        LEFT JOIN sales s ON u.id = s.agent_id 
-            AND MONTH(s.sale_date) = MONTH(CURRENT_DATE())
-            AND YEAR(s.sale_date) = YEAR(CURRENT_DATE())
-            AND s.status != 'cancelled'
-        WHERE u.role = 'sales_agent' AND u.status = 'active'
-        GROUP BY u.id, u.full_name
-        ORDER BY total_revenue DESC
-        LIMIT 5");
-    $topAgents = $stmt->fetchAll();
-}
-
-// Sales trend (last 7 days)
-$salesTrend = [];
-if (hasPermission('sales', 'view')) {
-    for ($i = 6; $i >= 0; $i--) {
-        $date = date('Y-m-d', strtotime("-$i days"));
-        $dayName = date('D', strtotime("-$i days"));
-        
-        $stmt = $pdo->prepare("SELECT 
-            COUNT(*) as count,
-            COALESCE(SUM(sale_price), 0) as revenue
-            FROM sales 
-            WHERE DATE(sale_date) = ? AND status != 'cancelled'");
-        $stmt->execute([$date]);
-        $data = $stmt->fetch();
-        
-        $salesTrend[] = [
-            'day' => $dayName,
-            'count' => $data['count'],
-            'revenue' => $data['revenue']
-        ];
-    }
-}
-
-// Upcoming site visits
-$upcomingSiteVisits = [];
-if (hasPermission('site_visits', 'view')) {
-    $stmt = $pdo->query("SELECT sv.*, pr.project_name 
-                         FROM site_visits sv
-                         JOIN projects pr ON sv.project_id = pr.id
-                         WHERE sv.visit_date >= NOW() AND sv.status = 'scheduled'
-                         ORDER BY sv.visit_date ASC
-                         LIMIT 5");
-    $upcomingSiteVisits = $stmt->fetchAll();
-}
-
-// Hot leads with scoring if available
-$hotLeads = [];
-if (hasPermission('leads', 'view')) {
-    // Check if lead_scores table exists
-    $stmt = $pdo->query("SHOW TABLES LIKE 'lead_scores'");
-    if ($stmt->fetch()) {
+    try {
         $stmt = $pdo->query("
-            SELECT l.*, ls.score, ls.grade 
-            FROM leads l 
-            JOIN lead_scores ls ON l.id = ls.lead_id 
-            WHERE l.status NOT IN ('converted', 'lost') 
-            ORDER BY ls.score DESC 
+            SELECT 
+                u.id,
+                u.full_name,
+                COUNT(s.id) as sales_count,
+                COALESCE(SUM(s.sale_price), 0) as total_revenue,
+                COALESCE(AVG(s.sale_price), 0) as avg_sale_value
+            FROM users u
+            LEFT JOIN sales s ON u.id = s.agent_id 
+                AND MONTH(s.sale_date) = MONTH(CURRENT_DATE())
+                AND YEAR(s.sale_date) = YEAR(CURRENT_DATE())
+                AND s.status != 'cancelled'
+            WHERE u.role = 'sales_agent' AND u.status = 'active'
+            GROUP BY u.id, u.full_name
+            ORDER BY total_revenue DESC
             LIMIT 5
         ");
-        $hotLeads = $stmt->fetchAll();
+        $topAgents = $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Top agents error: " . $e->getMessage());
     }
+}
+
+// Get Sales Trend (Last 7 Days)
+$salesTrend = [];
+if (hasPermission('sales', 'view')) {
+    try {
+        for ($i = 6; $i >= 0; $i--) {
+            $date = date('Y-m-d', strtotime("-$i days"));
+            $dayName = date('D', strtotime($date));
+            
+            $query = "SELECT 
+                COUNT(*) as count,
+                COALESCE(SUM(sale_price), 0) as revenue
+                FROM sales 
+                WHERE DATE(sale_date) = ? AND status != 'cancelled'";
+            
+            if ($userRole === 'sales_agent') {
+                $query .= " AND agent_id = ?";
+                $stmt = $pdo->prepare($query);
+                $stmt->execute([$date, $userId]);
+            } else {
+                $stmt = $pdo->prepare($query);
+                $stmt->execute([$date]);
+            }
+            
+            $data = $stmt->fetch();
+            $salesTrend[] = [
+                'day' => $dayName,
+                'date' => $date,
+                'count' => $data['count'],
+                'revenue' => $data['revenue']
+            ];
+        }
+    } catch (Exception $e) {
+        error_log("Sales trend error: " . $e->getMessage());
+    }
+}
+
+// Get Upcoming Site Visits
+$upcomingSiteVisits = [];
+if (hasPermission('site_visits', 'view')) {
+    try {
+        $stmt = $pdo->query("
+            SELECT sv.*, pr.project_name, pr.location
+            FROM site_visits sv
+            JOIN projects pr ON sv.project_id = pr.id
+            WHERE sv.visit_date >= NOW() 
+            AND sv.status = 'scheduled'
+            ORDER BY sv.visit_date ASC
+            LIMIT 5
+        ");
+        $upcomingSiteVisits = $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Site visits error: " . $e->getMessage());
+    }
+}
+
+// Get Hot Leads (if lead scoring is available)
+$hotLeads = [];
+if (hasPermission('leads', 'view')) {
+    try {
+        // Check if lead_scores table exists
+        $stmt = $pdo->query("SHOW TABLES LIKE 'lead_scores'");
+        if ($stmt->fetch()) {
+            $query = "
+                SELECT l.*, ls.score, ls.grade, u.full_name as agent_name
+                FROM leads l 
+                LEFT JOIN lead_scores ls ON l.id = ls.lead_id 
+                LEFT JOIN users u ON l.assigned_to = u.id
+                WHERE l.status NOT IN ('converted', 'lost')";
+            
+            if ($userRole === 'sales_agent') {
+                $query .= " AND l.assigned_to = ?";
+                $query .= " ORDER BY ls.score DESC LIMIT 5";
+                $stmt = $pdo->prepare($query);
+                $stmt->execute([$userId]);
+            } else {
+                $query .= " ORDER BY ls.score DESC LIMIT 5";
+                $stmt = $pdo->query($query);
+            }
+            $hotLeads = $stmt->fetchAll();
+        }
+    } catch (Exception $e) {
+        error_log("Hot leads error: " . $e->getMessage());
+    }
+}
+
+// Get Recent Activities
+$recentActivities = [];
+try {
+    $query = "SELECT * FROM activity_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
+    $stmt = $pdo->prepare($query);
+    $stmt->execute([$userId]);
+    $recentActivities = $stmt->fetchAll();
+} catch (Exception $e) {
+    error_log("Activities error: " . $e->getMessage());
+}
+
+// Get Tasks
+$pendingTasks = [];
+try {
+    $stmt = $pdo->query("SHOW TABLES LIKE 'tasks'");
+    if ($stmt->fetch()) {
+        $query = "SELECT * FROM tasks WHERE assigned_to = ? AND status = 'pending' ORDER BY due_date ASC LIMIT 5";
+        $stmt = $pdo->prepare($query);
+        $stmt->execute([$userId]);
+        $pendingTasks = $stmt->fetchAll();
+    }
+} catch (Exception $e) {
+    error_log("Tasks error: " . $e->getMessage());
 }
 
 include 'includes/header.php';
 ?>
 
 <div class="p-4 md:p-6 pb-20 md:pb-6">
-    <!-- Welcome Section with Time-based Greeting -->
+    <!-- Welcome Section -->
     <div class="mb-6">
         <?php
         $hour = date('G');
         $greeting = $hour < 12 ? 'Good Morning' : ($hour < 17 ? 'Good Afternoon' : 'Good Evening');
         ?>
         <h1 class="text-3xl md:text-4xl font-bold text-gray-800">
-            <?php echo $greeting; ?>, <?php echo sanitize(explode(' ', getUserName())[0]); ?>
+            <?php echo $greeting; ?>, <?php echo sanitize(explode(' ', $userName)[0]); ?>! 👋
         </h1>
-        <p class="text-gray-600 mt-1">Here's what's happening with your business today.</p>
+        <p class="text-gray-600 mt-1">
+            <?php echo date('l, F j, Y'); ?> • Here's your business overview
+        </p>
     </div>
     
-    <!-- Quick Stats Cards - Row 1 (Full width cards) -->
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
-        <!-- Today's Sales -->
-        <?php if (isset($stats['today_sales'])): ?>
-        <div class="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
-            <div class="flex items-center justify-between mb-1">
-                <div class="bg-white bg-opacity-30 p-2 rounded-lg">
-                    <i class="fas fa-calendar-day text-xl"></i>
-                </div>
-                <span class="text-xs bg-white bg-opacity-20 px-2 py-0.5 rounded-full">Today</span>
-            </div>
-            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['today_sales']; ?></p>
-            <p class="text-xs opacity-90">Sales Today</p>
-        </div>
-        <?php endif; ?>
-        
-        <!-- Monthly Sales -->
-        <?php if (isset($stats['monthly_sales'])): ?>
-        <div class="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
-            <div class="flex items-center justify-between mb-1">
-                <div class="bg-white bg-opacity-30 p-2 rounded-lg">
-                    <i class="fas fa-chart-line text-xl"></i>
-                </div>
-                <span class="text-xs bg-white bg-opacity-20 px-2 py-0.5 rounded-full">Month</span>
-            </div>
-            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['monthly_sales']; ?></p>
-            <p class="text-xs opacity-90 truncate"><?php echo formatMoney($stats['monthly_revenue']); ?></p>
-        </div>
-        <?php endif; ?>
-        
-        <!-- Monthly Payments -->
-        <?php if (isset($stats['monthly_payments'])): ?>
-        <div class="bg-gradient-to-br from-teal-500 to-teal-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
-            <div class="flex items-center justify-between mb-1">
-                <div class="bg-white bg-opacity-30 p-2 rounded-lg">
-                    <i class="fas fa-money-bill-wave text-xl"></i>
-                </div>
-                <span class="text-xs bg-white bg-opacity-20 px-2 py-0.5 rounded-full">Payments</span>
-            </div>
-            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['monthly_payment_count']; ?></p>
-            <p class="text-xs opacity-90 truncate"><?php echo formatMoney($stats['monthly_payments']); ?></p>
-        </div>
-        <?php endif; ?>
-        
-        <!-- Available Plots -->
-        <?php if (isset($stats['available'])): ?>
-        <div class="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
-            <div class="flex items-center justify-between mb-1">
-                <div class="bg-white bg-opacity-30 p-2 rounded-lg">
-                    <i class="fas fa-map text-xl"></i>
-                </div>
-                <span class="text-xs bg-white bg-opacity-20 px-2 py-0.5 rounded-full">Plots</span>
-            </div>
-            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['available']; ?></p>
-            <p class="text-xs opacity-90">Available</p>
-        </div>
-        <?php endif; ?>
-        
-        <!-- New Leads -->
-        <?php if (isset($stats['new_leads'])): ?>
-        <div class="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
-            <div class="flex items-center justify-between mb-1">
-                <div class="bg-white bg-opacity-30 p-2 rounded-lg">
-                    <i class="fas fa-user-plus text-xl"></i>
-                </div>
-                <span class="text-xs bg-white bg-opacity-20 px-2 py-0.5 rounded-full">Fresh</span>
-            </div>
-            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['new_leads']; ?></p>
-            <p class="text-xs opacity-90">New Leads</p>
-        </div>
-        <?php endif; ?>
-    </div>
-
-    <!-- AI Insights Section (Only show if AI service is available) -->
-    <?php if (!empty($revenuePredictions)): ?>
+    <!-- AI Insights Alert (if available) -->
+    <?php if (!empty($aiInsights)): ?>
     <div class="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-xl shadow-lg p-6 mb-6 text-white">
         <div class="flex items-center justify-between mb-4">
             <h2 class="text-xl font-bold flex items-center">
-                <i class="fas fa-brain mr-2"></i> AI Insights & Predictions
+                <i class="fas fa-brain mr-2"></i> AI Insights
             </h2>
-            <a href="/analytics-dashboard.php" class="text-white/80 hover:text-white text-sm">
-                View Full Analytics →
-            </a>
+            <span class="text-xs bg-white/20 px-3 py-1 rounded-full">Powered by AI</span>
         </div>
-        
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <?php foreach ($revenuePredictions as $prediction): ?>
+            <?php foreach (array_slice($aiInsights, 0, 3) as $insight): ?>
             <div class="bg-white/10 backdrop-blur rounded-lg p-4">
-                <p class="text-white/80 text-sm"><?php echo date('F Y', strtotime($prediction['month'] . '-01')); ?></p>
-                <p class="text-2xl font-bold"><?php echo formatMoney($prediction['predicted_revenue']); ?></p>
-                <div class="flex items-center mt-2">
-                    <div class="flex-1 bg-white/20 rounded-full h-1">
-                        <div class="bg-white h-1 rounded-full" style="width: <?php echo $prediction['confidence'] * 100; ?>%"></div>
+                <div class="flex items-start">
+                    <i class="fas <?php echo $insight['icon']; ?> text-2xl mr-3 text-<?php echo $insight['color']; ?>-300"></i>
+                    <div>
+                        <h4 class="font-semibold mb-1"><?php echo $insight['title']; ?></h4>
+                        <p class="text-sm text-white/90"><?php echo $insight['message']; ?></p>
                     </div>
-                    <span class="text-xs ml-2"><?php echo round($prediction['confidence'] * 100); ?>% confidence</span>
                 </div>
             </div>
             <?php endforeach; ?>
@@ -335,206 +475,242 @@ include 'includes/header.php';
     </div>
     <?php endif; ?>
     
-    <!-- Key Metrics Cards - Row 2 (4 cards) -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <!-- Total Revenue -->
-        <?php if (isset($stats['total_revenue'])): ?>
-        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-green-500 hover:shadow-xl transition">
-            <div class="flex items-center mb-2">
-                <div class="bg-green-100 p-2 rounded-lg mr-2">
-                    <i class="fas fa-dollar-sign text-green-600 text-lg"></i>
+    <!-- Primary Stats Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+        <!-- Today's Sales -->
+        <div class="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-calendar-day text-xl"></i>
                 </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-gray-600 text-xs">Total Revenue</p>
-                    <p class="text-lg font-bold text-gray-800 truncate"><?php echo formatMoney($stats['total_revenue']); ?></p>
-                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">Today</span>
             </div>
-            <div class="text-xs">
-                <span class="text-green-600 font-semibold"><?php echo $stats['total_sales']; ?> sales</span>
-            </div>
+            <p class="text-2xl font-bold mb-0.5"><?php echo number_format($stats['today_sales']); ?></p>
+            <p class="text-xs opacity-90">Sales Today</p>
         </div>
-        <?php endif; ?>
         
-        <!-- Outstanding Balance -->
-        <?php if (isset($stats['outstanding_balance'])): ?>
-        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-orange-500 hover:shadow-xl transition">
-            <div class="flex items-center mb-2">
-                <div class="bg-orange-100 p-2 rounded-lg mr-2">
-                    <i class="fas fa-exclamation-circle text-orange-600 text-lg"></i>
+        <!-- Monthly Revenue -->
+        <div class="bg-gradient-to-br from-green-500 to-green-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-chart-line text-xl"></i>
                 </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-gray-600 text-xs">Outstanding</p>
-                    <p class="text-lg font-bold text-gray-800 truncate"><?php echo formatMoney($stats['outstanding_balance']); ?></p>
-                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">Month</span>
             </div>
-            <div class="text-xs">
-                <span class="text-orange-600 font-semibold">Pending</span>
-            </div>
+            <p class="text-lg font-bold mb-0.5"><?php echo formatMoney($stats['monthly_revenue']); ?></p>
+            <p class="text-xs opacity-90"><?php echo $stats['monthly_sales']; ?> Sales</p>
         </div>
-        <?php endif; ?>
+        
+        <!-- Available Plots -->
+        <div class="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-map text-xl"></i>
+                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">Plots</span>
+            </div>
+            <p class="text-2xl font-bold mb-0.5"><?php echo number_format($stats['available_plots']); ?></p>
+            <p class="text-xs opacity-90">Available</p>
+        </div>
+        
+        <!-- New Leads -->
+        <div class="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-user-plus text-xl"></i>
+                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">New</span>
+            </div>
+            <p class="text-2xl font-bold mb-0.5"><?php echo number_format($stats['new_leads']); ?></p>
+            <p class="text-xs opacity-90">New Leads</p>
+        </div>
         
         <!-- Total Clients -->
-        <?php if (isset($stats['total_clients'])): ?>
-        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-blue-500 hover:shadow-xl transition">
-            <div class="flex items-center mb-2">
-                <div class="bg-blue-100 p-2 rounded-lg mr-2">
-                    <i class="fas fa-users text-blue-600 text-lg"></i>
+        <div class="bg-gradient-to-br from-teal-500 to-teal-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-users text-xl"></i>
                 </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-gray-600 text-xs">Total Clients</p>
-                    <p class="text-lg font-bold text-gray-800"><?php echo $stats['total_clients']; ?></p>
-                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">Total</span>
             </div>
-            <div class="text-xs">
-                <span class="text-blue-600 font-semibold">Active</span>
-            </div>
-        </div>
-        <?php endif; ?>
-        
-        <!-- Total Projects -->
-        <?php if (isset($stats['total_projects'])): ?>
-        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-indigo-500 hover:shadow-xl transition">
-            <div class="flex items-center mb-2">
-                <div class="bg-indigo-100 p-2 rounded-lg mr-2">
-                    <i class="fas fa-building text-indigo-600 text-lg"></i>
-                </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-gray-600 text-xs">Projects</p>
-                    <p class="text-lg font-bold text-gray-800"><?php echo $stats['total_projects']; ?></p>
-                </div>
-            </div>
-            <div class="text-xs">
-                <span class="text-indigo-600 font-semibold"><?php echo $stats['active_projects']; ?> active</span>
-            </div>
-        </div>
-        <?php endif; ?>
-    </div>
-
-    <!-- Hot Leads Section (Only show if lead scoring is available) -->
-    <?php if (!empty($hotLeads) && hasPermission('leads', 'view')): ?>
-    <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-bold flex items-center">
-                <i class="fas fa-fire text-orange-500 mr-2"></i> Hot Leads (AI Scored)
-            </h3>
-            <a href="/leads.php" class="text-primary hover:underline text-sm">View All →</a>
+            <p class="text-2xl font-bold mb-0.5"><?php echo number_format($stats['total_clients']); ?></p>
+            <p class="text-xs opacity-90">Clients</p>
         </div>
         
-        <div class="space-y-3">
-            <?php foreach ($hotLeads as $lead): ?>
-            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
-                <div class="flex items-center flex-1">
-                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-orange-400 to-red-500 text-white flex items-center justify-center font-bold mr-3">
-                        <?php echo $lead['grade'] ?? 'N'; ?>
-                    </div>
-                    <div>
-                        <p class="font-semibold"><?php echo sanitize($lead['full_name']); ?></p>
-                        <p class="text-xs text-gray-600">Score: <?php echo $lead['score'] ?? '0'; ?>/100 • <?php echo ucfirst($lead['status']); ?></p>
-                    </div>
+        <!-- Conversion Rate -->
+        <div class="bg-gradient-to-br from-pink-500 to-pink-600 rounded-xl shadow-lg p-4 text-white transform hover:scale-105 transition">
+            <div class="flex items-center justify-between mb-1">
+                <div class="bg-white/30 p-2 rounded-lg">
+                    <i class="fas fa-percentage text-xl"></i>
                 </div>
-                <div class="text-right">
-                    <p class="text-sm font-bold text-primary">
-                        <?php echo isset($leadPredictions[$lead['id']]) ? round($leadPredictions[$lead['id']] * 100) : 0; ?>% likely
-                    </p>
-                    <p class="text-xs text-gray-500">to convert</p>
-                </div>
+                <span class="text-xs bg-white/20 px-2 py-0.5 rounded-full">Rate</span>
             </div>
-            <?php endforeach; ?>
+            <p class="text-2xl font-bold mb-0.5"><?php echo $stats['conversion_rate']; ?>%</p>
+            <p class="text-xs opacity-90">Conversion</p>
         </div>
     </div>
-    <?php endif; ?>
     
-    <!-- Charts and Data Section -->
+    <!-- Financial Overview Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-green-500">
+            <div class="flex items-center mb-2">
+                <div class="bg-green-100 p-2 rounded-lg mr-3">
+                    <i class="fas fa-dollar-sign text-green-600 text-lg"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="text-gray-600 text-xs">Total Revenue</p>
+                    <p class="text-lg font-bold text-gray-800"><?php echo formatMoney($stats['total_revenue']); ?></p>
+                </div>
+            </div>
+            <div class="text-xs text-green-600">
+                <i class="fas fa-arrow-up mr-1"></i>
+                <?php echo number_format($stats['total_sales']); ?> total sales
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-blue-500">
+            <div class="flex items-center mb-2">
+                <div class="bg-blue-100 p-2 rounded-lg mr-3">
+                    <i class="fas fa-money-bill-wave text-blue-600 text-lg"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="text-gray-600 text-xs">Monthly Payments</p>
+                    <p class="text-lg font-bold text-gray-800"><?php echo formatMoney($stats['monthly_payments']); ?></p>
+                </div>
+            </div>
+            <div class="text-xs text-blue-600">
+                <i class="fas fa-check-circle mr-1"></i>
+                Collected this month
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-orange-500">
+            <div class="flex items-center mb-2">
+                <div class="bg-orange-100 p-2 rounded-lg mr-3">
+                    <i class="fas fa-exclamation-triangle text-orange-600 text-lg"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="text-gray-600 text-xs">Outstanding</p>
+                    <p class="text-lg font-bold text-gray-800"><?php echo formatMoney($stats['outstanding_balance']); ?></p>
+                </div>
+            </div>
+            <div class="text-xs text-orange-600">
+                Pending collection
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-xl shadow-lg p-4 border-l-4 border-purple-500">
+            <div class="flex items-center mb-2">
+                <div class="bg-purple-100 p-2 rounded-lg mr-3">
+                    <i class="fas fa-building text-purple-600 text-lg"></i>
+                </div>
+                <div class="flex-1">
+                    <p class="text-gray-600 text-xs">Active Projects</p>
+                    <p class="text-lg font-bold text-gray-800"><?php echo number_format($stats['active_projects']); ?></p>
+                </div>
+            </div>
+            <div class="text-xs text-purple-600">
+                <?php echo number_format($stats['total_plots']); ?> total plots
+            </div>
+        </div>
+    </div>
+    
+    <!-- Charts Section -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
         <!-- Sales Trend Chart -->
-        <?php if (!empty($salesTrend)): ?>
         <div class="lg:col-span-2 bg-white rounded-xl shadow-lg p-6">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-bold text-gray-800">7-Day Sales Trend</h2>
-                <select class="text-sm border border-gray-300 rounded-lg px-3 py-1">
-                    <option>Last 7 Days</option>
-                    <option>Last 30 Days</option>
-                    <option>This Month</option>
-                </select>
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 bg-blue-500 rounded-full mr-2"></div>
+                        <span class="text-sm text-gray-600">Count</span>
+                    </div>
+                    <div class="flex items-center">
+                        <div class="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
+                        <span class="text-sm text-gray-600">Revenue</span>
+                    </div>
+                </div>
             </div>
             <canvas id="salesTrendChart" class="w-full" style="max-height: 300px;"></canvas>
         </div>
-        <?php endif; ?>
         
-        <!-- Plot Status Distribution -->
-        <?php if (isset($stats['total'])): ?>
+        <!-- Plot Distribution -->
         <div class="bg-white rounded-xl shadow-lg p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">Plot Distribution</h2>
-            <canvas id="plotChart" style="max-height: 300px;"></canvas>
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Plot Status</h2>
+            <canvas id="plotChart" style="max-height: 200px;"></canvas>
             <div class="mt-4 space-y-2">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center">
                         <div class="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
                         <span class="text-sm text-gray-600">Available</span>
                     </div>
-                    <span class="text-sm font-semibold"><?php echo $stats['available']; ?></span>
+                    <span class="text-sm font-semibold"><?php echo number_format($stats['available_plots']); ?></span>
                 </div>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center">
                         <div class="w-3 h-3 bg-yellow-500 rounded-full mr-2"></div>
                         <span class="text-sm text-gray-600">Booked</span>
                     </div>
-                    <span class="text-sm font-semibold"><?php echo $stats['booked']; ?></span>
+                    <span class="text-sm font-semibold"><?php echo number_format($stats['booked_plots']); ?></span>
                 </div>
                 <div class="flex items-center justify-between">
                     <div class="flex items-center">
                         <div class="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
                         <span class="text-sm text-gray-600">Sold</span>
                     </div>
-                    <span class="text-sm font-semibold"><?php echo $stats['sold']; ?></span>
+                    <span class="text-sm font-semibold"><?php echo number_format($stats['sold_plots']); ?></span>
                 </div>
             </div>
         </div>
-        <?php endif; ?>
     </div>
     
-    <!-- Recent Activity and Top Performers -->
+    <!-- Activity Sections -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
         <!-- Recent Sales -->
-        <?php if (!empty($recentSales)): ?>
         <div class="bg-white rounded-xl shadow-lg p-6">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-bold text-gray-800">Recent Sales</h2>
+                <?php if (hasPermission('sales', 'view')): ?>
                 <a href="/sales.php" class="text-sm text-primary hover:underline">View All →</a>
+                <?php endif; ?>
             </div>
             <div class="space-y-3 overflow-y-auto" style="max-height: 350px;">
-                <?php foreach ($recentSales as $sale): ?>
-                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
-                    <div class="flex items-center flex-1 min-w-0">
-                        <div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold mr-3 flex-shrink-0">
-                            <?php echo strtoupper(substr($sale['client_name'], 0, 1)); ?>
+                <?php if (!empty($recentSales)): ?>
+                    <?php foreach ($recentSales as $sale): ?>
+                    <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                        <div class="flex items-center flex-1 min-w-0">
+                            <div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold mr-3 flex-shrink-0">
+                                <?php echo strtoupper(substr($sale['client_name'], 0, 1)); ?>
+                            </div>
+                            <div class="min-w-0 flex-1">
+                                <p class="font-semibold text-sm truncate"><?php echo sanitize($sale['client_name']); ?></p>
+                                <p class="text-xs text-gray-600 truncate">
+                                    <?php echo sanitize($sale['project_name'] . ' - Plot ' . $sale['plot_number']); ?>
+                                </p>
+                                <p class="text-xs text-gray-500"><?php echo formatDate($sale['sale_date'], 'M d'); ?></p>
+                            </div>
                         </div>
-                        <div class="min-w-0 flex-1">
-                            <p class="font-semibold text-sm truncate"><?php echo sanitize($sale['client_name']); ?></p>
-                            <p class="text-xs text-gray-600 truncate">
-                                <?php echo sanitize($sale['project_name'] . ' - Plot ' . $sale['plot_number']); ?>
-                            </p>
-                            <p class="text-xs text-gray-500"><?php echo formatDate($sale['sale_date'], 'M d'); ?></p>
+                        <div class="text-right ml-4">
+                            <p class="font-bold text-sm text-primary whitespace-nowrap"><?php echo formatMoney($sale['sale_price']); ?></p>
+                            <span class="text-xs px-2 py-1 rounded-full <?php echo $sale['status'] === 'completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'; ?>">
+                                <?php echo ucfirst($sale['status']); ?>
+                            </span>
                         </div>
                     </div>
-                    <div class="text-right ml-4">
-                        <p class="font-bold text-sm text-primary whitespace-nowrap"><?php echo formatMoney($sale['sale_price']); ?></p>
-                        <span class="text-xs px-2 py-1 rounded-full <?php echo $sale['status'] === 'completed' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'; ?>">
-                            <?php echo ucfirst($sale['status']); ?>
-                        </span>
-                    </div>
-                </div>
-                <?php endforeach; ?>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <p class="text-center text-gray-500 py-8">No recent sales</p>
+                <?php endif; ?>
             </div>
         </div>
-        <?php endif; ?>
         
-        <!-- Top Performing Agents -->
+        <!-- Top Performers / Hot Leads -->
         <?php if (!empty($topAgents)): ?>
         <div class="bg-white rounded-xl shadow-lg p-6">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-bold text-gray-800">Top Performers</h2>
-                <span class="text-sm text-gray-600">This Month</span>
+                <span class="text-sm text-gray-600"><?php echo date('F Y'); ?></span>
             </div>
             <div class="space-y-3">
                 <?php foreach ($topAgents as $index => $agent): ?>
@@ -546,7 +722,7 @@ include 'includes/header.php';
                         </div>
                         <div>
                             <p class="font-semibold text-sm"><?php echo sanitize($agent['full_name']); ?></p>
-                            <p class="text-xs text-gray-600"><?php echo $agent['sales_count']; ?> sales</p>
+                            <p class="text-xs text-gray-600"><?php echo number_format($agent['sales_count']); ?> sales</p>
                         </div>
                     </div>
                     <p class="font-bold text-primary"><?php echo formatMoney($agent['total_revenue']); ?></p>
@@ -554,93 +730,118 @@ include 'includes/header.php';
                 <?php endforeach; ?>
             </div>
         </div>
+        <?php elseif (!empty($hotLeads)): ?>
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-bold text-gray-800">Hot Leads 🔥</h2>
+                <?php if (hasPermission('leads', 'view')): ?>
+                <a href="/leads.php" class="text-sm text-primary hover:underline">View All →</a>
+                <?php endif; ?>
+            </div>
+            <div class="space-y-3">
+                <?php foreach ($hotLeads as $lead): ?>
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                    <div class="flex items-center flex-1">
+                        <div class="w-10 h-10 rounded-full bg-gradient-to-r from-orange-400 to-red-500 text-white flex items-center justify-center font-bold mr-3">
+                            <?php echo $lead['grade'] ?? 'N'; ?>
+                        </div>
+                        <div>
+                            <p class="font-semibold text-sm"><?php echo sanitize($lead['full_name']); ?></p>
+                            <p class="text-xs text-gray-600">Score: <?php echo $lead['score'] ?? '0'; ?>/100 • <?php echo ucfirst($lead['status']); ?></p>
+                        </div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
         <?php endif; ?>
     </div>
     
-    <!-- Upcoming Site Visits -->
-    <?php if (!empty($upcomingSiteVisits)): ?>
-    <div class="bg-white rounded-xl shadow-lg p-6 mb-6">
-        <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-bold text-gray-800">Upcoming Site Visits</h2>
-            <a href="/site-visits.php" class="text-sm text-primary hover:underline">View All →</a>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <?php foreach ($upcomingSiteVisits as $visit): ?>
-            <div class="border border-gray-200 rounded-lg p-4 hover:border-primary hover:shadow-md transition">
-                <div class="flex items-start justify-between mb-2">
-                    <h3 class="font-semibold text-sm"><?php echo sanitize($visit['title']); ?></h3>
-                    <span class="text-xs px-2 py-1 rounded-full bg-blue-100 text-blue-800">
-                        <?php echo ucfirst($visit['status']); ?>
-                    </span>
-                </div>
-                <p class="text-xs text-gray-600 mb-2"><?php echo sanitize($visit['project_name']); ?></p>
-                <div class="flex items-center text-xs text-gray-500">
-                    <i class="fas fa-calendar mr-1"></i>
-                    <?php echo formatDate($visit['visit_date'], 'M d, Y h:i A'); ?>
-                </div>
+    <!-- Upcoming Events & Quick Actions -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Upcoming Site Visits -->
+        <?php if (!empty($upcomingSiteVisits)): ?>
+        <div class="lg:col-span-2 bg-white rounded-xl shadow-lg p-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-bold text-gray-800">Upcoming Site Visits</h2>
+                <?php if (hasPermission('site_visits', 'view')): ?>
+                <a href="/site-visits.php" class="text-sm text-primary hover:underline">View All →</a>
+                <?php endif; ?>
             </div>
-            <?php endforeach; ?>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <?php foreach (array_slice($upcomingSiteVisits, 0, 4) as $visit): ?>
+                <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                    <h3 class="font-semibold text-sm mb-2"><?php echo sanitize($visit['title']); ?></h3>
+                    <p class="text-xs text-gray-600 mb-1">
+                        <i class="fas fa-building mr-1"></i> <?php echo sanitize($visit['project_name']); ?>
+                    </p>
+                    <p class="text-xs text-gray-600">
+                        <i class="fas fa-calendar mr-1"></i> <?php echo formatDate($visit['visit_date'], 'M d, h:i A'); ?>
+                    </p>
+                </div>
+                <?php endforeach; ?>
+            </div>
         </div>
-    </div>
-    <?php endif; ?>
-    
-    <!-- Quick Actions -->
-    <div class="bg-white rounded-xl shadow-lg p-6">
-        <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Actions</h2>
-        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <?php if (hasPermission('leads', 'create')): ?>
-            <a href="/leads.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-primary hover:bg-primary hover:bg-opacity-5 transition group">
-                <div class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center mb-2 group-hover:bg-primary group-hover:bg-opacity-20 transition">
-                    <i class="fas fa-user-plus text-xl text-blue-600 group-hover:text-primary"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">Add Lead</span>
-            </a>
-            <?php endif; ?>
-            
-            <?php if (hasPermission('clients', 'create')): ?>
-            <a href="/clients.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-secondary hover:bg-secondary hover:bg-opacity-5 transition group">
-                <div class="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center mb-2 group-hover:bg-secondary group-hover:bg-opacity-20 transition">
-                    <i class="fas fa-users text-xl text-orange-600 group-hover:text-secondary"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">Add Client</span>
-            </a>
-            <?php endif; ?>
-            
-            <?php if (hasPermission('sales', 'create')): ?>
-            <a href="/sales.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-green-500 hover:bg-green-50 transition group">
-                <div class="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mb-2 group-hover:bg-green-200 transition">
-                    <i class="fas fa-handshake text-xl text-green-600"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">New Sale</span>
-            </a>
-            <?php endif; ?>
-            
-            <?php if (hasPermission('projects', 'view')): ?>
-            <a href="/projects.php" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition group">
-                <div class="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mb-2 group-hover:bg-purple-200 transition">
-                    <i class="fas fa-building text-xl text-purple-600"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">Projects</span>
-            </a>
-            <?php endif; ?>
-            
-            <?php if (hasPermission('payments', 'create')): ?>
-            <a href="/payments.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-yellow-500 hover:bg-yellow-50 transition group">
-                <div class="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center mb-2 group-hover:bg-yellow-200 transition">
-                    <i class="fas fa-money-bill-wave text-xl text-yellow-600"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">Add Payment</span>
-            </a>
-            <?php endif; ?>
-            
-            <?php if (hasPermission('reports', 'view')): ?>
-            <a href="/reports.php" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-indigo-500 hover:bg-indigo-50 transition group">
-                <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-2 group-hover:bg-indigo-200 transition">
-                    <i class="fas fa-chart-bar text-xl text-indigo-600"></i>
-                </div>
-                <span class="text-xs font-semibold text-center">Reports</span>
-            </a>
-            <?php endif; ?>
+        <?php endif; ?>
+        
+        <!-- Quick Actions -->
+        <div class="<?php echo empty($upcomingSiteVisits) ? 'lg:col-span-3' : ''; ?> bg-white rounded-xl shadow-lg p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Actions</h2>
+            <div class="grid grid-cols-2 <?php echo empty($upcomingSiteVisits) ? 'md:grid-cols-3 lg:grid-cols-6' : ''; ?> gap-3">
+                <?php if (hasPermission('leads', 'create')): ?>
+                <a href="/leads.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-primary hover:bg-primary hover:bg-opacity-5 transition group">
+                    <div class="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center mb-2 group-hover:bg-primary group-hover:bg-opacity-20 transition">
+                        <i class="fas fa-user-plus text-xl text-blue-600 group-hover:text-primary"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">Add Lead</span>
+                </a>
+                <?php endif; ?>
+                
+                <?php if (hasPermission('sales', 'create')): ?>
+                <a href="/sales.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-green-500 hover:bg-green-50 transition group">
+                    <div class="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mb-2 group-hover:bg-green-200 transition">
+                        <i class="fas fa-handshake text-xl text-green-600"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">New Sale</span>
+                </a>
+                <?php endif; ?>
+                
+                <?php if (hasPermission('payments', 'create')): ?>
+                <a href="/payments.php" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-yellow-500 hover:bg-yellow-50 transition group">
+                    <div class="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center mb-2 group-hover:bg-yellow-200 transition">
+                        <i class="fas fa-money-bill-wave text-xl text-yellow-600"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">Payment</span>
+                </a>
+                <?php endif; ?>
+                
+                <?php if (hasPermission('clients', 'create')): ?>
+                <a href="/clients.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition group">
+                    <div class="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center mb-2 group-hover:bg-orange-200 transition">
+                        <i class="fas fa-users text-xl text-orange-600"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">Add Client</span>
+                </a>
+                <?php endif; ?>
+                
+                <?php if (hasPermission('site_visits', 'create')): ?>
+                <a href="/site-visits.php?action=create" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-purple-500 hover:bg-purple-50 transition group">
+                    <div class="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center mb-2 group-hover:bg-purple-200 transition">
+                        <i class="fas fa-calendar-check text-xl text-purple-600"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">Site Visit</span>
+                </a>
+                <?php endif; ?>
+                
+                <?php if (hasPermission('reports', 'view')): ?>
+                <a href="/reports.php" class="flex flex-col items-center justify-center p-4 rounded-xl border-2 border-gray-200 hover:border-indigo-500 hover:bg-indigo-50 transition group">
+                    <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center mb-2 group-hover:bg-indigo-200 transition">
+                        <i class="fas fa-chart-bar text-xl text-indigo-600"></i>
+                    </div>
+                    <span class="text-xs font-semibold text-center">Reports</span>
+                </a>
+                <?php endif; ?>
+            </div>
         </div>
     </div>
 </div>
@@ -655,60 +856,59 @@ if (trendCtx) {
         type: 'line',
         data: {
             labels: <?php echo json_encode(array_column($salesTrend, 'day')); ?>,
-            datasets: [{
-                label: 'Sales Count',
-                data: <?php echo json_encode(array_column($salesTrend, 'count')); ?>,
-                borderColor: '<?php echo $settings['primary_color']; ?>',
-                backgroundColor: '<?php echo $settings['primary_color']; ?>20',
-                tension: 0.4,
-                fill: true,
-                borderWidth: 3,
-                pointRadius: 5,
-                pointBackgroundColor: '<?php echo $settings['primary_color']; ?>',
-                pointBorderColor: '#fff',
-                pointBorderWidth: 2,
-                pointHoverRadius: 7
-            }]
+            datasets: [
+                {
+                    label: 'Sales Count',
+                    data: <?php echo json_encode(array_column($salesTrend, 'count')); ?>,
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    yAxisID: 'y',
+                    tension: 0.4
+                },
+                {
+                    label: 'Revenue',
+                    data: <?php echo json_encode(array_column($salesTrend, 'revenue')); ?>,
+                    borderColor: 'rgb(34, 197, 94)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    yAxisID: 'y1',
+                    tension: 0.4
+                }
+            ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
             plugins: {
                 legend: {
                     display: false
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    padding: 12,
-                    titleColor: '#fff',
-                    bodyColor: '#fff',
-                    borderColor: '<?php echo $settings['primary_color']; ?>',
-                    borderWidth: 1,
-                    displayColors: false,
-                    callbacks: {
-                        label: function(context) {
-                            return 'Sales: ' + context.parsed.y;
-                        }
-                    }
                 }
             },
             scales: {
                 y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
                     beginAtZero: true,
                     ticks: {
-                        precision: 0,
-                        color: '#6B7280'
-                    },
-                    grid: {
-                        color: '#E5E7EB'
+                        precision: 0
                     }
                 },
-                x: {
-                    ticks: {
-                        color: '#6B7280'
-                    },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    beginAtZero: true,
                     grid: {
-                        display: false
+                        drawOnChartArea: false,
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return 'KES ' + (value / 1000) + 'k';
+                        }
                     }
                 }
             }
@@ -718,7 +918,7 @@ if (trendCtx) {
 <?php endif; ?>
 
 // Plot Distribution Chart
-<?php if (isset($stats['total'])): ?>
+<?php if ($stats['total_plots'] > 0): ?>
 const plotCtx = document.getElementById('plotChart');
 if (plotCtx) {
     new Chart(plotCtx, {
@@ -727,17 +927,16 @@ if (plotCtx) {
             labels: ['Available', 'Booked', 'Sold'],
             datasets: [{
                 data: [
-                    <?php echo $stats['available']; ?>,
-                    <?php echo $stats['booked']; ?>,
-                    <?php echo $stats['sold']; ?>
+                    <?php echo $stats['available_plots']; ?>,
+                    <?php echo $stats['booked_plots']; ?>,
+                    <?php echo $stats['sold_plots']; ?>
                 ],
                 backgroundColor: [
-                    '#10B981',
-                    '#F59E0B',
-                    '#EF4444'
+                    'rgb(34, 197, 94)',
+                    'rgb(250, 204, 21)',
+                    'rgb(239, 68, 68)'
                 ],
-                borderWidth: 0,
-                hoverOffset: 4
+                borderWidth: 0
             }]
         },
         options: {
@@ -746,21 +945,6 @@ if (plotCtx) {
             plugins: {
                 legend: {
                     display: false
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    padding: 12,
-                    titleColor: '#fff',
-                    bodyColor: '#fff',
-                    borderWidth: 0,
-                    displayColors: true,
-                    callbacks: {
-                        label: function(context) {
-                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                            const percentage = ((context.parsed / total) * 100).toFixed(1);
-                            return context.label + ': ' + context.parsed + ' (' + percentage + '%)';
-                        }
-                    }
                 }
             },
             cutout: '70%'
@@ -769,12 +953,7 @@ if (plotCtx) {
 }
 <?php endif; ?>
 
-// Add smooth animations
-document.querySelectorAll('.transform').forEach(el => {
-    el.style.transition = 'all 0.3s ease';
-});
-
-// Auto-refresh stats every 5 minutes
+// Auto-refresh every 5 minutes
 setTimeout(() => {
     location.reload();
 }, 300000);
