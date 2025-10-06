@@ -443,14 +443,14 @@ include 'includes/header.php';
         $greeting = $hour < 12 ? 'Good Morning' : ($hour < 17 ? 'Good Afternoon' : 'Good Evening');
         ?>
         <h1 class="text-3xl md:text-4xl font-bold text-gray-800">
-            <?php echo $greeting; ?>, <?php echo sanitize(explode(' ', $userName)[0]); ?>! 👋
+            <?php echo $greeting; ?>, <?php echo sanitize(explode(' ', $userName)[0]); ?>
         </h1>
         <p class="text-gray-600 mt-1">
-            <?php echo date('l, F j, Y'); ?> • Here's your business overview
+            <?php echo date('l, F j, Y'); ?> â€¢ Here's your business overview
         </p>
     </div>
     
-    <!-- AI Insights Alert (if available) -->
+    <!-- AI Insights Alert (if available) 
     <?php if (!empty($aiInsights)): ?>
     <div class="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-xl shadow-lg p-6 mb-6 text-white">
         <div class="flex items-center justify-between mb-4">
@@ -473,7 +473,7 @@ include 'includes/header.php';
             <?php endforeach; ?>
         </div>
     </div>
-    <?php endif; ?>
+    <?php endif; ?>-->
     
     <!-- Primary Stats Cards -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
@@ -672,7 +672,7 @@ include 'includes/header.php';
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-bold text-gray-800">Recent Sales</h2>
                 <?php if (hasPermission('sales', 'view')): ?>
-                <a href="/sales.php" class="text-sm text-primary hover:underline">View All →</a>
+                <a href="/sales.php" class="text-sm text-primary hover:underline">View All â†’</a>
                 <?php endif; ?>
             </div>
             <div class="space-y-3 overflow-y-auto" style="max-height: 350px;">
@@ -733,9 +733,9 @@ include 'includes/header.php';
         <?php elseif (!empty($hotLeads)): ?>
         <div class="bg-white rounded-xl shadow-lg p-6">
             <div class="flex items-center justify-between mb-4">
-                <h2 class="text-xl font-bold text-gray-800">Hot Leads 🔥</h2>
+                <h2 class="text-xl font-bold text-gray-800">Hot Leads ðŸ”¥</h2>
                 <?php if (hasPermission('leads', 'view')): ?>
-                <a href="/leads.php" class="text-sm text-primary hover:underline">View All →</a>
+                <a href="/leads.php" class="text-sm text-primary hover:underline">View All â†’</a>
                 <?php endif; ?>
             </div>
             <div class="space-y-3">
@@ -747,7 +747,7 @@ include 'includes/header.php';
                         </div>
                         <div>
                             <p class="font-semibold text-sm"><?php echo sanitize($lead['full_name']); ?></p>
-                            <p class="text-xs text-gray-600">Score: <?php echo $lead['score'] ?? '0'; ?>/100 • <?php echo ucfirst($lead['status']); ?></p>
+                            <p class="text-xs text-gray-600">Score: <?php echo $lead['score'] ?? '0'; ?>/100 â€¢ <?php echo ucfirst($lead['status']); ?></p>
                         </div>
                     </div>
                 </div>
@@ -765,7 +765,7 @@ include 'includes/header.php';
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-bold text-gray-800">Upcoming Site Visits</h2>
                 <?php if (hasPermission('site_visits', 'view')): ?>
-                <a href="/site-visits.php" class="text-sm text-primary hover:underline">View All →</a>
+                <a href="/site-visits.php" class="text-sm text-primary hover:underline">View All â†’</a>
                 <?php endif; ?>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
